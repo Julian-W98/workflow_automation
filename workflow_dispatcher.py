@@ -116,12 +116,12 @@ def submit_workflow(
         WORKFLOW="{workflow_name}"
 
         cleanup_success() {{
-            rm -f "$STATUS_DIR/${{WORKFLOW}}.running"
+            rm -f "$STATUS_DIR/${{WORKFLOW}}.run"
             touch "$STATUS_DIR/${{WORKFLOW}}.done"
         }}
 
         cleanup_fail() {{
-            rm -f "$STATUS_DIR/${{WORKFLOW}}.running"
+            rm -f "$STATUS_DIR/${{WORKFLOW}}.run"
             touch "$STATUS_DIR/${{WORKFLOW}}.failed"
         }}
 
@@ -197,6 +197,13 @@ def process_workflow(csv_file: Path):
         if run_flag.exists():
             print(f"{run_dir.name}: {workflow_name} already RUNNING, skipping")
             continue
+
+        status_dirs = list(input_data_path.glob("*/workflow_status"))
+
+        for s in status_dirs:
+            if (s / f"{workflow_name}.run").exists():
+                print(f"{workflow_name}: another run is already running. Waiting.")
+                return
 
         # Alle passenden FASTQ-Dateien finden
         files = find_matching_fastqs(run_dir, data_regex)
