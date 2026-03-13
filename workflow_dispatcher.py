@@ -209,27 +209,32 @@ def process_workflow(csv_file: Path):
             return
 
         # Alle Unterordner als separate Runs behandeln
-        for run_dir in sorted(p for p in input_data_path.iterdir() if p.is_dir()):
+        for run_dir in sorted(p for p in input_data_path.rglob("*") if p.is_dir()):
+            if run_dir.name == "workflow_status":
+                continue  # skip workflow_status Ordner
+
             print(f"\nChecking run folder: {run_dir.name}")
 
-            print("run_dir")
-            print(run_dir)
-            # Status-Ordner für den Run
+            # Status-Ordner für den Run (nur prüfen, nicht erstellen)
             status_dir = run_dir / "workflow_status"
-            status_dir.mkdir(exist_ok=True)
 
             run_flag = status_dir / f"{workflow_name}.run"
             done_flag = status_dir / f"{workflow_name}.done"
 
-            if done_flag.exists():
-                print(f"{run_dir.name}: {workflow_name} already DONE, skipping")
-                continue
+            # Prüfen nur, wenn Ordner existiert
+            if status_dir.exists():
+                if done_flag.exists():
+                    print(f"{run_dir.name}: {workflow_name} already DONE, skipping")
+                    continue
 
-            if run_flag.exists():
-                print(f"{run_dir.name}: {workflow_name} already RUNNING, skipping")
-                continue
+                if run_flag.exists():
+                    print(f"{run_dir.name}: {workflow_name} already RUNNING, skipping")
+                    continue
 
-            status_dirs = list(input_data_path.glob("*/workflow_status"))
+            # Prüfen, ob in anderen workflow_status Ordnern eine andere Instanz läuft
+            status_dirs = [
+                s for s in input_data_path.glob("*/workflow_status") if s.exists()
+            ]
 
             for s in status_dirs:
                 if (s / f"{workflow_name}.run").exists():
@@ -258,7 +263,10 @@ def process_workflow(csv_file: Path):
             print(f"Updated run-date to {timestamp}")
 
             # Workflow starten
+            status_dir.mkdir(exist_ok=True)
             process_sample(workflow_path, workflow_name, command, status_dir=status_dir)
+
+            return  # start one job at a time
 
 
 def process_sample(
