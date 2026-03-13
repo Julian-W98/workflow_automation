@@ -14,15 +14,15 @@ WORKFLOW_DIR = Path("workflows")
 
 
 def load_workflow_config(csv_file: Path):
-    """Load workflow configuration from CSV."""
+    """Load workflow configurations from CSV."""
     with open(csv_file, newline="") as f:
         reader = csv.DictReader(f)
         configs = list(reader)
 
-    if len(configs) != 1:
-        raise ValueError(f"{csv_file} must contain exactly one row.")
+    if not configs:
+        raise ValueError(f"{csv_file} contains no workflow definitions.")
 
-    return configs[0]
+    return configs
 
 
 def find_matching_fastqs(input_dir: Path, regex_pattern: str):
@@ -42,14 +42,12 @@ def build_sample_table(files):
     for f in files:
         name = f.name
 
-        r1_match = re.match(r"(.+)_R1\.fastq\.gz$", name)
-        r2_match = re.match(r"(.+)_R2\.fastq\.gz$", name)
-
-        if r1_match:
-            sample = r1_match.group(1)
+        if "_R1" in name:
+            sample = re.sub(r"_R1", "", name).replace(".fastq.gz", "")
             samples.setdefault(sample, {})["fq1"] = f
-        elif r2_match:
-            sample = r2_match.group(1)
+
+        elif "_R2" in name:
+            sample = re.sub(r"_R2", "", name).replace(".fastq.gz", "")
             samples.setdefault(sample, {})["fq2"] = f
 
     # keep only complete pairs
@@ -160,71 +158,107 @@ def submit_workflow(
         return None
 
 
+def update_run_date(workflow_path: Path, run_name: str):
+    """
+    Replace the value of 'run-date:' in config/config.yaml with a timestamp
+    plus the provided run_name.
+    """
+
+    config_file = workflow_path / "config" / "config.yaml"
+
+    if not config_file.exists():
+        raise FileNotFoundError(f"{config_file} not found")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_date_value = f"{timestamp}_{run_name}"
+
+    new_lines = []
+
+    with open(config_file, "r") as f:
+        for line in f:
+            if line.strip().startswith("run-date:"):
+                new_lines.append(f'run-date: "{run_date_value}"\n')
+            else:
+                new_lines.append(line)
+
+    with open(config_file, "w") as f:
+        f.writelines(new_lines)
+
+    return run_date_value
+
+
 def process_workflow(csv_file: Path):
     """Process one workflow configuration for all runs in the input_data_path."""
     print(f"\nProcessing workflow config: {csv_file}")
 
-    config = load_workflow_config(csv_file)
+    configs = load_workflow_config(csv_file)
 
-    workflow_name = config["name"]
-    input_data_path = Path(config["input_data_path"])
-    data_regex = config["data_regex"]
-    workflow_path = Path(config["workflow_path"])
-    command = config["command"]
+    for config in configs:
 
-    print(f"Pipeline: {workflow_name}")
-    print(f"Input directory: {input_data_path}")
+        workflow_name = config["name"]
+        input_data_path = Path(config["input_data_path"])
+        data_regex = config["data_regex"]
+        workflow_path = Path(config["workflow_path"])
+        command = config["command"]
 
-    if not input_data_path.exists():
-        print("Input directory does not exist, skipping.")
-        return
+        print(f"\nPipeline: {workflow_name}")
+        print(f"Input directory: {input_data_path}")
 
-    # Alle Unterordner als separate Runs behandeln
-    for run_dir in sorted(p for p in input_data_path.iterdir() if p.is_dir()):
-        print(f"\nChecking run folder: {run_dir.name}")
+        if not input_data_path.exists():
+            print("Input directory does not exist, skipping.")
+            return
 
-        # Status-Ordner für den Run
-        status_dir = run_dir / "workflow_status"
-        status_dir.mkdir(exist_ok=True)
+        # Alle Unterordner als separate Runs behandeln
+        for run_dir in sorted(p for p in input_data_path.iterdir() if p.is_dir()):
+            print(f"\nChecking run folder: {run_dir.name}")
 
-        run_flag = status_dir / f"{workflow_name}.run"
-        done_flag = status_dir / f"{workflow_name}.done"
+            print("run_dir")
+            print(run_dir)
+            # Status-Ordner für den Run
+            status_dir = run_dir / "workflow_status"
+            status_dir.mkdir(exist_ok=True)
 
-        if done_flag.exists():
-            print(f"{run_dir.name}: {workflow_name} already DONE, skipping")
-            continue
+            run_flag = status_dir / f"{workflow_name}.run"
+            done_flag = status_dir / f"{workflow_name}.done"
 
-        if run_flag.exists():
-            print(f"{run_dir.name}: {workflow_name} already RUNNING, skipping")
-            continue
+            if done_flag.exists():
+                print(f"{run_dir.name}: {workflow_name} already DONE, skipping")
+                continue
 
-        status_dirs = list(input_data_path.glob("*/workflow_status"))
+            if run_flag.exists():
+                print(f"{run_dir.name}: {workflow_name} already RUNNING, skipping")
+                continue
 
-        for s in status_dirs:
-            if (s / f"{workflow_name}.run").exists():
-                print(f"{workflow_name}: another run is already running. Waiting.")
-                return
+            status_dirs = list(input_data_path.glob("*/workflow_status"))
 
-        # Alle passenden FASTQ-Dateien finden
-        files = find_matching_fastqs(run_dir, data_regex)
+            for s in status_dirs:
+                if (s / f"{workflow_name}.run").exists():
+                    print(f"{workflow_name}: another run is already running. Waiting.")
+                    return
 
-        if not files:
-            print(f"{run_dir.name}: no matching FASTQ files found, skipping")
-            continue
+            # Alle passenden FASTQ-Dateien finden
+            files = find_matching_fastqs(run_dir, data_regex)
 
-        samples = build_sample_table(files)
+            if not files:
+                print(f"{run_dir.name}: no matching FASTQ files found, skipping")
+                continue
 
-        if not samples:
-            print(f"{run_dir.name}: no complete R1/R2 pairs detected, skipping")
-            continue
+            samples = build_sample_table(files)
 
-        # Sample sheet schreiben
-        sample_sheet = write_sample_sheet(samples, workflow_path)
-        print(f"Sample sheet written to: {sample_sheet}")
-        print(f"Samples detected: {len(samples)}")
+            if not samples:
+                print(f"{run_dir.name}: no complete R1/R2 pairs detected, skipping")
+                continue
 
-        # Workflow starten
-        process_sample(workflow_path, workflow_name, command, status_dir=status_dir)
+            # Sample sheet schreiben
+            sample_sheet = write_sample_sheet(samples, workflow_path)
+            print(f"Sample sheet written to: {sample_sheet}")
+            print(f"Samples detected: {len(samples)}")
+
+            timestamp = update_run_date(workflow_path, run_dir.name)
+            print(f"Updated run-date to {timestamp}")
+
+            # Workflow starten
+            process_sample(workflow_path, workflow_name, command, status_dir=status_dir)
 
 
 def process_sample(
