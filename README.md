@@ -9,6 +9,7 @@
 - Add workflow description
 - Instructions how to add pipeline
 - Instructions ho to run pipeline in container?
+- Overwrite config.yaml run_date
 - Add env.yml
 - Add test
 
